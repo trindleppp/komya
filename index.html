@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Blob Metaball (Stylish Palette Shuffle)</title>
+  <title>Blob Metaball (Fixed Eye Colors)</title>
   <style>
     html,body { margin:0; height:100%; background:#111; }
     #app { position:fixed; inset:0; display:grid; place-items:center; }
@@ -16,10 +16,12 @@
   import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
   import { Pane } from "https://cdn.jsdelivr.net/npm/tweakpane@4.0.4/dist/tweakpane.min.js";
 
+  // ===== 設定 =====
   const INTERNAL_W = 1200, INTERNAL_H = 1200;
   const TAU = Math.PI * 2;
   const rand = (a,b)=> a + Math.random()*(b-a);
 
+  // ===== シェーダ =====
   const VERT = `
     precision highp float;
     attribute vec3 position;
@@ -36,13 +38,16 @@
     uniform float radii[32];
     uniform int num_circles;
     uniform vec3 blob_color;
+
     uniform vec2 eye_center;
     uniform float eye_radius;
     uniform vec2 pupil_center;
     uniform float pupil_radius;
     uniform vec3 eye_color;
     uniform vec3 pupil_color;
+
     uniform vec2 resolution;
+
     void main(){
         vec2 uv = vUv * resolution;
         float field = 0.0;
@@ -54,6 +59,7 @@
             field += (r*r) / d2;
         }
         if(field <= 0.8){ discard; }
+
         if(length(uv - pupil_center) < pupil_radius){
             gl_FragColor = vec4(pupil_color, 1.0); return;
         }
@@ -64,11 +70,22 @@
     }
   `;
 
+  // ===== Blob =====
   class Blob {
     constructor(n=14, color=new THREE.Vector3(1,0,0), pos=new THREE.Vector2(INTERNAL_W/2, INTERNAL_H/2)){
       this.num_circles = n;
       this.color = color;
-      this.pupil_color = new THREE.Vector3(1-color.x,1-color.y,1-color.z);
+
+      // --- 瞳の色を固定設定 ---
+      if(color.equals(new THREE.Vector3(1,0,0))){           
+        this.pupil_color = new THREE.Vector3(0,0,1);        // 赤Blob → 青瞳
+      } else if(color.equals(new THREE.Vector3(0,0,1))){    
+        this.pupil_color = new THREE.Vector3(1,0,0);        // 青Blob → 赤瞳
+      } else if(color.equals(new THREE.Vector3(0.6,0,0.8))){
+        this.pupil_color = new THREE.Vector3(0,1,0.6);      // 紫Blob → エメラルドグリーン瞳
+      } else {
+        this.pupil_color = new THREE.Vector3(1-color.x, 1-color.y, 1-color.z);
+      }
 
       this.centers = Array.from({length:32}, ()=> new THREE.Vector2(pos.x,pos.y));
       this.radii   = new Float32Array(32);
@@ -95,9 +112,9 @@
       this.pupil_target = pos.clone();
       this.pupil_timer = rand(1,3);
 
-      this.eye_range = 30;
+      this.eye_range = 29;
       this.eye_scale = 1.2;
-      this.move_speed = 100;
+      this.move_speed = 38;
 
       this.blob_target = pos.clone();
       this.blob_timer  = rand(3, 7);
@@ -122,6 +139,7 @@
     }
 
     update(dt, cohesion){
+      // wander
       this.blob_timer -= dt;
       if(this.blob_timer <= 0){
         this.blob_target.set(rand(0,INTERNAL_W), rand(0,INTERNAL_H));
@@ -138,6 +156,7 @@
         }
       }
 
+      // パーツのうねり
       for(let i=0;i<this.num_circles;i++){
         this.phase[i]+=this.speed[i]*dt;
         this.radii[i]=Math.max(2,this.base_r[i]+20*Math.sin(this.phase[i]));
@@ -156,6 +175,7 @@
         }
       }
 
+      // 目と瞳
       const { r: r_est, center } = this.estimate_radius();
       const eye_r=this.base_avg_r*this.eye_scale;
       const pupil_r=eye_r*0.5;
@@ -182,6 +202,7 @@
         this.pupil_pos.copy(this.eye_pos).add(v);
       }
 
+      // cohesion
       for(let i=0;i<this.num_circles;i++){
         const dx = center.x - this.centers[i].x;
         const dy = center.y - this.centers[i].y;
@@ -228,6 +249,7 @@
     }
   }
 
+  // ===== BlobRenderer =====
   class BlobRenderer {
     constructor(){
       this.material = new THREE.RawShaderMaterial({
@@ -272,6 +294,7 @@
     }
   }
 
+  // ===== Three.js セットアップ =====
   const container = document.getElementById('app');
   const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
   container.appendChild(renderer.domElement);
@@ -287,6 +310,7 @@
   window.addEventListener('resize', resize);
   resize();
 
+  // ===== Blob 生成 =====
   const blobs = [
     new Blob(14,new THREE.Vector3(1,0,0),     new THREE.Vector2(INTERNAL_W*0.3, INTERNAL_H*0.6)),
     new Blob(14,new THREE.Vector3(0,0,1),     new THREE.Vector2(INTERNAL_W*0.7, INTERNAL_H*0.7)),
@@ -295,8 +319,17 @@
   const renderers = blobs.map(()=> new BlobRenderer());
   renderers.forEach(r=> scene.add(r.mesh));
 
+  // ===== UI =====
   const pane=new Pane({title:'Controls'});
-  const params={ eye_range:30, interval:1.5, eye_scale:1.4, attract:10, repel:10, move_speed:100, cohesion:1.0 };
+  const params={ 
+    eye_range:30,
+    interval:1.5,
+    eye_scale:1.4,
+    attract:10,
+    repel:10,
+    move_speed:100,
+    cohesion:1.0
+  };
   pane.addBinding(params,'eye_range',{min:10,max:200,step:1});
   pane.addBinding(params,'interval',{min:0.5,max:5,step:0.1});
   pane.addBinding(params,'eye_scale',{min:1,max:3,step:0.05});
@@ -305,37 +338,7 @@
   pane.addBinding(params,'move_speed',{min:20,max:200,step:1});
   pane.addBinding(params,'cohesion',{min:0,max:5,step:0.1});
 
-  const palette = [
-    new THREE.Vector3(46/255, 204/255, 113/255),
-    new THREE.Vector3(230/255, 126/255, 34/255),
-    new THREE.Vector3(52/255, 152/255, 219/255),
-    new THREE.Vector3(232/255, 67/255, 147/255),
-    new THREE.Vector3(142/255, 68/255, 173/255),
-    new THREE.Vector3(241/255, 196/255, 15/255),
-    new THREE.Vector3(168/255, 230/255, 207/255),
-    new THREE.Vector3(255/255, 211/255, 182/255),
-    new THREE.Vector3(214/255, 234/255, 255/255),
-    new THREE.Vector3(255/255, 182/255, 193/255),
-    new THREE.Vector3(205/255, 180/255, 219/255),
-    new THREE.Vector3(255/255, 249/255, 177/255),
-  ];
-
-  function pickDifferentColor(excludeColor){
-    let choice;
-    do {
-      choice = palette[Math.floor(Math.random()*palette.length)];
-    } while(choice.equals(excludeColor));
-    return choice.clone();
-  }
-
-  pane.addButton({title:'Shuffle Colors'}).on('click', ()=>{
-    for(const b of blobs){
-      const newColor = palette[Math.floor(Math.random()*palette.length)].clone();
-      b.color.copy(newColor);
-      b.pupil_color = pickDifferentColor(newColor);
-    }
-  });
-
+  // ===== 当たり判定 =====
   function applyForces(A,B,dt,attract,repel){
     const {r:rA,center:cA}=A.estimate_radius();
     const {r:rB,center:cB}=B.estimate_radius();
@@ -360,10 +363,12 @@
     }
   }
 
+  // ===== ループ =====
   let last = performance.now();
   function tick(now){
     const dt = Math.min(0.05, (now-last)/1000);
     last = now;
+
     for(const b of blobs){
       b.eye_range = params.eye_range;
       b.max_interval = params.interval;
@@ -377,10 +382,11 @@
       }
     }
     for(let i=0;i<blobs.length;i++) renderers[i].updateFromBlob(blobs[i]);
+
     renderer.render(scene, camera);
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
   </script>
 </body>
-</html>
+  </html>
