@@ -323,4 +323,138 @@
     }
     updateFromBlob(blob){
       const u=blob.uniforms();
-      this.material.uniforms.num_circles.value=u.num
+      this.material.uniforms.num_circles.value=u.num_circles;
+      const centers=this.material.uniforms.centers.value;
+      const radii=this.material.uniforms.radii.value;
+      for(let i=0;i<32;i++){
+        if(i<u.num_circles){ centers[i].copy(u.centers[i]); radii[i]=u.radii[i]; }
+        else { centers[i].set(0,0); radii[i]=0.0; }
+      }
+      this.material.uniforms.blob_color.value.copy(u.blob_color);
+      this.material.uniforms.eye_center.value.copy(u.eye_center);
+      this.material.uniforms.eye_radius.value=u.eye_radius;
+      this.material.uniforms.eye_color.value.copy(u.eye_color);
+      this.material.uniforms.pupil_center.value.copy(u.pupil_center);
+      this.material.uniforms.pupil_radius.value=u.pupil_radius;
+      this.material.uniforms.pupil_color.value.copy(u.pupil_color);
+      this.material.uniforms.resolution.value.set(INTERNAL_W,INTERNAL_H);
+    }
+  }
+
+  // =====================
+  // Three.js セットアップ
+  // =====================
+  const container=document.getElementById('app');
+  const renderer=new THREE.WebGLRenderer({ antialias:true, alpha:false });
+  container.appendChild(renderer.domElement);
+  // モバイル重すぎるなら 1.5 に下げろ
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
+  renderer.setClearColor(0xffffff,1);
+  const scene=new THREE.Scene();
+  const camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+
+  function resize(){
+    const s=Math.min(window.innerWidth,window.innerHeight);
+    renderer.setSize(s,s);
+  }
+  window.addEventListener('resize',resize);
+  resize();
+
+  // =====================
+  // Blob 生成（初期の瞳色マッピングを固定）
+  // =====================
+  const blobs=[
+    new Blob(14,new THREE.Vector3(1,0,0),     new THREE.Vector3(0,0,1),   new THREE.Vector2(INTERNAL_W*0.3,INTERNAL_H*0.6)), // 赤→青瞳
+    new Blob(14,new THREE.Vector3(0,0,1),     new THREE.Vector3(1,0,0),   new THREE.Vector2(INTERNAL_W*0.7,INTERNAL_H*0.7)), // 青→赤瞳
+    new Blob(14,new THREE.Vector3(0.6,0,0.8), new THREE.Vector3(0,1,0.6), new THREE.Vector2(INTERNAL_W*0.5,INTERNAL_H*0.4)), // 紫→エメ瞳
+  ];
+  const renderers=blobs.map(()=>new BlobRenderer());
+  renderers.forEach(r=>scene.add(r.mesh));
+
+  // =====================
+  // UI（日本語）
+  // =====================
+  const pane=new Pane({title:'調整パネル'});
+  const params={
+    eye_range:30,     // 目の動ける範囲
+    interval:1.5,     // 目の動きの間隔
+    eye_scale:1.4,    // 目の大きさ
+    attract:10,       // 引力
+    repel:10,         // 反発
+    move_speed:100,   // 移動速度
+    cohesion:1.0      // まとまり
+  };
+  pane.addBinding(params,'eye_range',{label:'目の範囲',min:10,max:200,step:1});
+  pane.addBinding(params,'interval',{label:'目の間隔',min:0.5,max:5,step:0.1});
+  pane.addBinding(params,'eye_scale',{label:'目の大きさ',min:1,max:3,step:0.05});
+  pane.addBinding(params,'attract',{label:'引力',min:0,max:100,step:1});
+  pane.addBinding(params,'repel',{label:'反発',min:0,max:150,step:1});
+  pane.addBinding(params,'move_speed',{label:'移動速度',min:20,max:200,step:1});
+  pane.addBinding(params,'cohesion',{label:'まとまり',min:0,max:5,step:0.1});
+
+  // =====================
+  // Blob間の力
+  // =====================
+  function applyForces(A,B,dt,attract,repel){
+    const {r:rA,center:cA}=A.estimate_radius();
+    const {r:rB,center:cB}=B.estimate_radius();
+    const delta=cB.clone().sub(cA);
+    const d=delta.length();
+    if(d<1e-6)return;
+    const dir=delta.multiplyScalar(1/d);
+    const desired=(rA+rB)*1.2;
+    const scale=Math.max(Math.min(dt*60,1.5),0.5);
+    if(d<desired){
+      const overlap=desired-d;
+      let mag=Math.min(overlap*0.5,8.0);
+      let push=dir.clone().multiplyScalar(mag*(repel/80.0)*scale);
+      A.apply_force(push.clone().multiplyScalar(-1));
+      B.apply_force(push);
+    } else {
+      const gap=d-desired;
+      let pull_mag=Math.min(gap*0.12,5.0);
+      let pull=dir.clone().multiplyScalar(pull_mag*(attract/40.0)*scale);
+      A.apply_force(pull);
+      B.apply_force(pull.clone().multiplyScalar(-1));
+    }
+  }
+
+  // =====================
+  // ランダムカラー（本体色＋十分コントラストの瞳色）
+  // =====================
+  document.getElementById('randomize').addEventListener('click',()=>{
+    for(const b of blobs){
+      b.color = randomColor();
+      b.pupil_color = randomContrastingColor(b.color, 0.6);
+    }
+  });
+
+  // =====================
+  // ループ
+  // =====================
+  let last=performance.now();
+  function tick(now){
+    const dt=Math.min(0.05,(now-last)/1000);
+    last=now;
+
+    for(const b of blobs){
+      b.eye_range = params.eye_range;
+      b.max_interval = params.interval;   // interval 反映
+      b.eye_scale = params.eye_scale;
+      b.move_speed = params.move_speed;
+      b.update(dt, params.cohesion);
+    }
+    for(let i=0;i<blobs.length;i++){
+      for(let j=i+1;j<blobs.length;j++){
+        applyForces(blobs[i],blobs[j],dt,params.attract,params.repel);
+      }
+    }
+    for(let i=0;i<blobs.length;i++) renderers[i].updateFromBlob(blobs[i]);
+
+    renderer.render(scene,camera);
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  </script>
+</body>
+  </html>
